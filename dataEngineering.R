@@ -63,10 +63,10 @@ head(comparison, 20)
 comparison %>%
   filter(total > 5000) %>%
   arrange(desc(diff)) %>%
-  head(20)
+  head(8)
 
 # Words most skewed toward True
 comparison %>%
   filter(total > 5000) %>%
   arrange(diff) %>%
-  head(20)
+  head(8)
