@@ -5,14 +5,12 @@ library(stringr)
 library(tidytext)
 
 ui <- fluidPage(
-  titlePanel("Word Count App (Stop Words Removed)"),
+  titlePanel("Word Count"),
   
   sidebarLayout(
     sidebarPanel(
       fileInput("file", "Upload a text file (.txt)", 
                 accept = c(".txt")),
-      helpText("This app reads the file, extracts all words, removes stop words, 
-               and lists the remaining words ordered by frequency.")
     ),
     
     mainPanel(
