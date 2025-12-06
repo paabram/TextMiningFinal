@@ -1,0 +1,113 @@
+library(caret)
+library(naivebayes)
+library(glmnet)
+library(dplyr)
+library(readr)
+news <- read.csv("~/Desktop/news_tfidf.csv")
+
+
+# FIX LABELS (BINARY: real vs fake) ---------------------
+# Original label had 0 and tiny float values.
+# convert:
+#   0   -> "real"
+#   !=0 -> "fake"
+news$label <- ifelse(news$label == 0, "real", "fake")
+news$label <- factor(news$label)
+
+cat("Class balance after relabeling:\n")
+print(table(news$label))
+
+# REMOVE NEAR-ZERO VARIANCE FEATURES (PREDICTORS ONLY) ---
+# Keep label safe, only clean TF-IDF columns
+predictors <- news %>% select(-label)
+
+nzv <- nearZeroVar(predictors)
+predictors_reduced <- predictors[, -nzv]
+
+news_reduced <- cbind(predictors_reduced, label = news$label)
+
+cat("\nRemoved NZV features:", length(nzv), "\n")
+cat("Remaining columns:", ncol(news_reduced), "\n")
+cat("Class balance in reduced data:\n")
+print(table(news_reduced$label))
+
+# TRAIN / TEST SPLIT ------------------------------------
+set.seed(123)
+
+train_index <- createDataPartition(news_reduced$label, p = 0.8, list = FALSE)
+
+train <- news_reduced[train_index, ]
+test  <- news_reduced[-train_index, ]
+
+x_train <- train %>% select(-label)
+y_train <- train$label
+
+x_test  <- test %>% select(-label)
+y_test  <- test$label
+
+# Matrix versions for glmnet & SVM
+x_train_mat <- as.matrix(x_train)
+x_test_mat  <- as.matrix(x_test)
+
+# LOGISTIC REGRESSION (GLMNET) --------------------------
+log_model <- cv.glmnet(
+  x_train_mat, y_train,
+  family = "binomial",
+  alpha = 0,           # ridge logistic regression
+  type.measure = "class"
+)
+
+log_pred <- predict(log_model, x_test_mat, type = "class")
+log_cm <- confusionMatrix(as.factor(log_pred), y_test)
+
+cat("\n================ LOGISTIC REGRESSION RESULTS ================\n")
+print(log_cm)
+
+# NAIVE BAYES -------------------------------------------
+nb_model <- naive_bayes(label ~ ., data = train)
+nb_pred  <- predict(nb_model, newdata = x_test)
+
+nb_cm <- confusionMatrix(nb_pred, y_test)
+
+cat("\n==================== NAIVE BAYES RESULTS ====================\n")
+print(nb_cm)
+
+# SUPPORT VECTOR MACHINE (SVM, MATRIX INTERFACE) ---------
+# Using matrix interface avoids protection stack overflow
+svm_model <- svm(
+  x = x_train_mat,
+  y = y_train,
+  kernel = "linear",
+  probability = TRUE
+)
+
+svm_pred <- predict(svm_model, x_test_mat)
+
+svm_cm <- confusionMatrix(svm_pred, y_test)
+
+cat("\n======================= SVM RESULTS ==========================\n")
+print(svm_cm)
+
+# FEATURE IMPORTANCE (FROM LOGISTIC REGRESSION) ----------
+coefs <- coef(log_model, s = log_model$lambda.min)
+coefs_df <- data.frame(
+  term = rownames(coefs),
+  weight = as.vector(coefs)
+)
+
+# Strongest positive weights → more "fake"
+top_fake <- coefs_df %>%
+  arrange(desc(weight)) %>%
+  head(20)
+
+# Strongest negative weights → more "real"
+top_real <- coefs_df %>%
+  arrange(weight) %>%
+  head(20)
+
+cat("\n=============== TOP 20 WORDS PREDICTING FAKE NEWS =============\n")
+print(top_fake)
+
+cat("\n=============== TOP 20 WORDS PREDICTING REAL NEWS =============\n")
+print(top_real)
+############################################################
