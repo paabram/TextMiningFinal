@@ -1,0 +1,273 @@
+> library(caret)
+
+> library(naivebayes)
+
+> library(glmnet)
+
+> library(dplyr)
+
+> library(readr)
+
+> news <- read.csv("~/Desktop/news_tfidf.csv")
+
+> # FIX LABELS (BINARY: real vs fake) ---------------------
+> # Original label had 0 and tiny float values.
+> # convert:
+> #   0   -> "real"
+> # .... [TRUNCATED] 
+
+> news$label <- factor(news$label)
+
+> cat("Class balance after relabeling:\n")
+Class balance after relabeling:
+
+> print(table(news$label))
+
+fake real 
+   8 1443 
+
+> # REMOVE NEAR-ZERO VARIANCE FEATURES (PREDICTORS ONLY) ---
+> # Keep label safe, only clean TF-IDF columns
+> predictors <- news %>% select(-label)
+
+> nzv <- nearZeroVar(predictors)
+
+> predictors_reduced <- predictors[, -nzv]
+
+> news_reduced <- cbind(predictors_reduced, label = news$label)
+
+> cat("\nRemoved NZV features:", length(nzv), "\n")
+
+Removed NZV features: 30584 
+
+> cat("Remaining columns:", ncol(news_reduced), "\n")
+Remaining columns: 143 
+
+> cat("Class balance in reduced data:\n")
+Class balance in reduced data:
+
+> print(table(news_reduced$label))
+
+fake real 
+   8 1443 
+
+> # TRAIN / TEST SPLIT ------------------------------------
+> set.seed(123)
+
+> train_index <- createDataPartition(news_reduced$label, p = 0.8, list = FALSE)
+
+> train <- news_reduced[train_index, ]
+
+> test  <- news_reduced[-train_index, ]
+
+> x_train <- train %>% select(-label)
+
+> y_train <- train$label
+
+> x_test  <- test %>% select(-label)
+
+> y_test  <- test$label
+
+> # Matrix versions for glmnet & SVM
+> x_train_mat <- as.matrix(x_train)
+
+> x_test_mat  <- as.matrix(x_test)
+
+> # LOGISTIC REGRESSION (GLMNET) --------------------------
+> log_model <- cv.glmnet(
++   x_train_mat, y_train,
++   family = "binomial",
++   alpha  .... [TRUNCATED] 
+
+> log_pred <- predict(log_model, x_test_mat, type = "class")
+
+> log_cm <- confusionMatrix(as.factor(log_pred), y_test)
+
+> cat("\n================ LOGISTIC REGRESSION RESULTS ================\n")
+
+================ LOGISTIC REGRESSION RESULTS ================
+
+> print(log_cm)
+Confusion Matrix and Statistics
+
+          Reference
+Prediction fake real
+      fake    0    0
+      real    1  288
+                                          
+               Accuracy : 0.9965          
+                 95% CI : (0.9809, 0.9999)
+    No Information Rate : 0.9965          
+    P-Value [Acc > NIR] : 0.7358          
+                                          
+                  Kappa : 0               
+                                          
+ Mcnemar's Test P-Value : 1.0000          
+                                          
+            Sensitivity : 0.00000         
+            Specificity : 1.00000         
+         Pos Pred Value :     NaN         
+         Neg Pred Value : 0.99654         
+             Prevalence : 0.00346         
+         Detection Rate : 0.00000         
+   Detection Prevalence : 0.00000         
+      Balanced Accuracy : 0.50000         
+                                          
+       'Positive' Class : fake            
+                                          
+
+> # NAIVE BAYES -------------------------------------------
+> nb_model <- naive_bayes(label ~ ., data = train)
+
+> nb_pred  <- predict(nb_model, newdata = x_test)
+
+> nb_cm <- confusionMatrix(nb_pred, y_test)
+
+> cat("\n==================== NAIVE BAYES RESULTS ====================\n")
+
+==================== NAIVE BAYES RESULTS ====================
+
+> print(nb_cm)
+Confusion Matrix and Statistics
+
+          Reference
+Prediction fake real
+      fake    0   15
+      real    1  273
+                                         
+               Accuracy : 0.9446         
+                 95% CI : (0.9116, 0.968)
+    No Information Rate : 0.9965         
+    P-Value [Acc > NIR] : 1.000000       
+                                         
+                  Kappa : -0.0065        
+                                         
+ Mcnemar's Test P-Value : 0.001154       
+                                         
+            Sensitivity : 0.00000        
+            Specificity : 0.94792        
+         Pos Pred Value : 0.00000        
+         Neg Pred Value : 0.99635        
+             Prevalence : 0.00346        
+         Detection Rate : 0.00000        
+   Detection Prevalence : 0.05190        
+      Balanced Accuracy : 0.47396        
+                                         
+       'Positive' Class : fake           
+                                         
+
+> # SUPPORT VECTOR MACHINE (SVM, MATRIX INTERFACE) ---------
+> # Using matrix interface avoids protection stack overflow
+> svm_model <- svm(
++   x  .... [TRUNCATED] 
+
+> svm_pred <- predict(svm_model, x_test_mat)
+
+> svm_cm <- confusionMatrix(svm_pred, y_test)
+
+> cat("\n======================= SVM RESULTS ==========================\n")
+
+======================= SVM RESULTS ==========================
+
+> print(svm_cm)
+Confusion Matrix and Statistics
+
+          Reference
+Prediction fake real
+      fake    0    9
+      real    1  279
+                                          
+               Accuracy : 0.9654          
+                 95% CI : (0.9373, 0.9833)
+    No Information Rate : 0.9965          
+    P-Value [Acc > NIR] : 1.00000         
+                                          
+                  Kappa : -0.0063         
+                                          
+ Mcnemar's Test P-Value : 0.02686         
+                                          
+            Sensitivity : 0.00000         
+            Specificity : 0.96875         
+         Pos Pred Value : 0.00000         
+         Neg Pred Value : 0.99643         
+             Prevalence : 0.00346         
+         Detection Rate : 0.00000         
+   Detection Prevalence : 0.03114         
+      Balanced Accuracy : 0.48438         
+                                          
+       'Positive' Class : fake            
+                                          
+
+> # FEATURE IMPORTANCE (FROM LOGISTIC REGRESSION) ----------
+> coefs <- coef(log_model, s = log_model$lambda.min)
+
+> coefs_df <- data.frame(
++   term = rownames(coefs),
++   weight = as.vector(coefs)
++ )
+
+> # Strongest positive weights → more "fake"
+> top_fake <- coefs_df %>%
++   arrange(desc(weight)) %>%
++   head(20)
+
+> # Strongest negative weights → more "real"
+> top_real <- coefs_df %>%
++   arrange(weight) %>%
++   head(20)
+
+> cat("\n=============== TOP 20 WORDS PREDICTING FAKE NEWS =============\n")
+
+=============== TOP 20 WORDS PREDICTING FAKE NEWS =============
+
+> print(top_fake)
+          term       weight
+1  (Intercept) 5.105945e+00
+2          one 4.560435e-37
+3         many 4.344718e-37
+4      reuters 4.118286e-37
+5         also 3.779101e-37
+6        since 3.342429e-37
+7      another 3.260314e-37
+8         part 3.256230e-37
+9          new 3.181577e-37
+10     without 2.877863e-37
+11   president 2.634385e-37
+12         end 2.576719e-37
+13       image 2.445063e-37
+14        good 2.346950e-37
+15  washington 2.330649e-37
+16        well 2.103923e-37
+17    election 2.086002e-37
+18        help 2.082405e-37
+19       years 2.065846e-37
+20        said 2.039367e-37
+
+> cat("\n=============== TOP 20 WORDS PREDICTING REAL NEWS =============\n")
+
+=============== TOP 20 WORDS PREDICTING REAL NEWS =============
+
+> print(top_real)
+          term        weight
+1         long -2.783712e-36
+2          get -6.716180e-37
+3          don -5.964876e-37
+4         even -5.331136e-37
+5         back -4.940649e-37
+6         took -4.842350e-37
+7        world -4.733067e-37
+8        media -4.520255e-37
+9          far -4.396470e-37
+10        made -4.379004e-37
+11         top -3.316447e-37
+12      likely -3.172352e-37
+13       every -3.148658e-37
+14        time -3.023887e-37
+15     america -2.962606e-37
+16       month -2.784962e-37
+17       still -2.707774e-37
+18   officials -1.982002e-37
+19 republicans -1.873789e-37
+20  government -1.870097e-37
+
+> ############################################################
