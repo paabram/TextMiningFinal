@@ -12,7 +12,7 @@
 > library(e1071)
 
 > # read in news CSV and label object
-> news <- read.csv("data/news_tfidf.csv")
+> news <- read.csv("data/news_tfidf.csv", row.names = 1)
 
 > y <- readRDS("data/labels.rds")
 
@@ -42,7 +42,7 @@ FALSE  TRUE
 Removed NZV features: 30253 
 
 > cat("Remaining columns:", ncol(news_reduced), "\n")
-Remaining columns: 159 
+Remaining columns: 158 
 
 > # TRAIN / TEST SPLIT
 > set.seed(123)
@@ -83,31 +83,31 @@ Remaining columns: 159
 
 ================ LOGISTIC REGRESSION RESULTS ================
 
-> print(log_cm) # 97.59% accuracy
+> print(log_cm) # 92.76% accuracy
 Confusion Matrix and Statistics
 
           Reference
 Prediction FALSE TRUE
-     FALSE   143    5
-     TRUE      2  140
+     FALSE   138   14
+     TRUE      7  131
                                           
-               Accuracy : 0.9759          
-                 95% CI : (0.9509, 0.9902)
+               Accuracy : 0.9276          
+                 95% CI : (0.8914, 0.9546)
     No Information Rate : 0.5             
     P-Value [Acc > NIR] : <2e-16          
                                           
-                  Kappa : 0.9517          
+                  Kappa : 0.8552          
                                           
- Mcnemar's Test P-Value : 0.4497          
+ Mcnemar's Test P-Value : 0.1904          
                                           
-            Sensitivity : 0.9862          
-            Specificity : 0.9655          
-         Pos Pred Value : 0.9662          
-         Neg Pred Value : 0.9859          
+            Sensitivity : 0.9517          
+            Specificity : 0.9034          
+         Pos Pred Value : 0.9079          
+         Neg Pred Value : 0.9493          
              Prevalence : 0.5000          
-         Detection Rate : 0.4931          
-   Detection Prevalence : 0.5103          
-      Balanced Accuracy : 0.9759          
+         Detection Rate : 0.4759          
+   Detection Prevalence : 0.5241          
+      Balanced Accuracy : 0.9276          
                                           
        'Positive' Class : FALSE           
                                           
@@ -123,31 +123,31 @@ Prediction FALSE TRUE
 
 ==================== NAIVE BAYES RESULTS ====================
 
-> print(nb_cm) # 92.76% accuracy
+> print(nb_cm) # 92.07% accuracy
 Confusion Matrix and Statistics
 
           Reference
 Prediction FALSE TRUE
-     FALSE   142   18
-     TRUE      3  127
+     FALSE   142   20
+     TRUE      3  125
                                           
-               Accuracy : 0.9276          
-                 95% CI : (0.8914, 0.9546)
+               Accuracy : 0.9207          
+                 95% CI : (0.8834, 0.9491)
     No Information Rate : 0.5             
-    P-Value [Acc > NIR] : < 2e-16         
+    P-Value [Acc > NIR] : < 2.2e-16       
                                           
-                  Kappa : 0.8552          
+                  Kappa : 0.8414          
                                           
- Mcnemar's Test P-Value : 0.00225         
+ Mcnemar's Test P-Value : 0.0008492       
                                           
             Sensitivity : 0.9793          
-            Specificity : 0.8759          
-         Pos Pred Value : 0.8875          
-         Neg Pred Value : 0.9769          
+            Specificity : 0.8621          
+         Pos Pred Value : 0.8765          
+         Neg Pred Value : 0.9766          
              Prevalence : 0.5000          
          Detection Rate : 0.4897          
-   Detection Prevalence : 0.5517          
-      Balanced Accuracy : 0.9276          
+   Detection Prevalence : 0.5586          
+      Balanced Accuracy : 0.9207          
                                           
        'Positive' Class : FALSE           
                                           
@@ -168,104 +168,109 @@ Prediction FALSE TRUE
 
 ======================= SVM RESULTS ==========================
 
-> print(svm_cm) # 98.62% accuracy (BEST)
+> print(svm_cm) # 92.07% accuracy
 Confusion Matrix and Statistics
 
           Reference
 Prediction FALSE TRUE
-     FALSE   144    3
-     TRUE      1  142
+     FALSE   134   12
+     TRUE     11  133
                                           
-               Accuracy : 0.9862          
-                 95% CI : (0.9651, 0.9962)
+               Accuracy : 0.9207          
+                 95% CI : (0.8834, 0.9491)
     No Information Rate : 0.5             
     P-Value [Acc > NIR] : <2e-16          
                                           
-                  Kappa : 0.9724          
+                  Kappa : 0.8414          
                                           
- Mcnemar's Test P-Value : 0.6171          
+ Mcnemar's Test P-Value : 1               
                                           
-            Sensitivity : 0.9931          
-            Specificity : 0.9793          
-         Pos Pred Value : 0.9796          
-         Neg Pred Value : 0.9930          
+            Sensitivity : 0.9241          
+            Specificity : 0.9172          
+         Pos Pred Value : 0.9178          
+         Neg Pred Value : 0.9236          
              Prevalence : 0.5000          
-         Detection Rate : 0.4966          
-   Detection Prevalence : 0.5069          
-      Balanced Accuracy : 0.9862          
+         Detection Rate : 0.4621          
+   Detection Prevalence : 0.5034          
+      Balanced Accuracy : 0.9207          
                                           
        'Positive' Class : FALSE           
                                           
 
-> # FEATURE IMPORTANCE (FROM SVM)
+> # FEATURE IMPORTANCE (FROM REGRESSION)
 > 
-> coefs <- coef(svm_model)
+> coefs <- coef(log_model)
 
 > coefs_df <- data.frame(
 +   term = labels(coefs),
 +   weight = as.vector(coefs)
 + )
 
-> # Strongest positive weights point toward is_fake = TRUE (per output of svm_model$levels)
+> # Strongest positive weights point toward is_fake = TRUE (per output of log_model$levels)
 > top_fake <- coefs_df %>%
 +   arrange(desc(weight)) %>%
 + .... [TRUNCATED] 
 
+> colnames(top_fake) <- c("term", "weight")
+
 > # Strongest negative weights impact is_fake = FALSE (realnews)
 > top_real <- coefs_df %>%
 +   arrange(weight) %>%
-+   head(20)
++   head(20) %>% 
++   select(1,3)
+
+> colnames(top_real) <- c("term", "weight")
 
 > cat("\n=============== TOP 20 WORDS PREDICTING FAKE NEWS =============\n")
 
 =============== TOP 20 WORDS PREDICTING FAKE NEWS =============
 
 > print(top_fake)
-         term     weight
-1        news 0.30005188
-2       obama 0.21608346
-3         don 0.18365934
-4        just 0.18293265
-5     hillary 0.17389582
-6  government 0.16751503
-7        even 0.15083627
-8        like 0.15078449
-9         via 0.14839777
-10       show 0.14712546
-11    however 0.14086533
-12      think 0.12564273
-13       says 0.12231214
-14      going 0.11116327
-15       need 0.10669128
-16       know 0.10477861
-17        war 0.10069278
-18    america 0.09833305
-19   decision 0.09658386
-20 democratic 0.09376332
+       term    weight
+1     image 63.538156
+2       via 56.519663
+3      just 25.259751
+4      even 19.969854
+5       one 18.501140
+6     never 16.292640
+7      know 15.226129
+8      like 14.876631
+9     think 14.754591
+10  america 14.409354
+11 american 14.250291
+12     show 13.946905
+13     news 13.512008
+14  however 12.409839
+15      can 11.830955
+16    every 10.898214
+17  another 10.498948
+18    obama 10.153455
+19     says 10.067251
+20   people  9.975727
 
 > cat("\n=============== TOP 20 WORDS PREDICTING REAL NEWS =============\n")
 
 =============== TOP 20 WORDS PREDICTING REAL NEWS =============
 
 > print(top_real)
-          term      weight
-1            X -1.32704360
-2      reuters -0.83251791
-3       trumps -0.42916263
-4         said -0.24908409
-5       donald -0.23015528
-6     official -0.16887335
-7      federal -0.15183880
-8        place -0.14170830
-9          can -0.12812064
-10 republicans -0.12399734
-11      policy -0.11813862
-12      leader -0.10782325
-13        back -0.10592275
-14         say -0.10322907
-15       major -0.10022350
-16   secretary -0.09627537
-17      states -0.09130265
-18    thursday -0.09104590
-19        last -0.08881329
-20     country -0.08849515
+        term    weight
+1       said -94.45308
+2    reuters -76.12019
+3     trumps -25.55928
+4      month -19.30682
+5      since -17.53384
+6      major -17.06189
+7   thursday -16.15657
+8  including -15.39263
+9    whether -15.12014
+10      also -14.69786
+11      year -14.50559
+12  official -14.35796
+13    states -14.26078
+14    leader -13.74424
+15      told -12.02733
+16    friday -11.82971
+17   tuesday -11.72034
+18      week -11.46069
+19       two -11.34555
+20  minister -10.77337

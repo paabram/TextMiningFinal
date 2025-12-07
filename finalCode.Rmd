@@ -7,7 +7,105 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(stringr)
+library(dplyr)
+library(tidyverse)
+library(tidytext)
+library(tm)
+library(qdap)
+library(slam)
 ```
 
-## R Markdown
+## 1) Data Acquisition, Exploration, and Preliminary Cleaning
+
+```{r}
+#read data
+Fake <- read_csv("data/Fake.csv")
+True <- read_csv("data/True.csv")
+
+# add word counts and evaluate separately 
+Fake$nwords <- str_count(Fake$text, "\\S+")
+print("===== FAKE ARTICLES =====")
+sprintf("Min: %d          Max: %d", min(Fake$nwords, na.rm = T), max(Fake$nwords, na.rm = T))
+# will need to remove articles with little/missing body
+sprintf("Mean: %f", mean(Fake$nwords, na.rm = T))
+
+True$nwords <- str_count(True$text, "\\S+")
+print("===== TRUE ARTICLES =====")
+sprintf("Min: %d        Max: %d", min(True$nwords, na.rm = T), max(True$nwords, na.rm = T))
+sprintf("Mean: %f", mean(True$nwords, na.rm = T))
+
+# add label and join datasets
+Fake <- Fake %>% mutate(is_fake = TRUE)
+True <- True %>% mutate(is_fake = FALSE)
+
+news <- bind_rows(Fake, True) %>%
+  mutate(doc_id = row_number())
+
+# convert date column to object
+news$date <- as.Date(news$date, "%B %d, %Y")
+
+# summary statistics
+summary(news)
+```
+## 2) Data Cleaning and Engineering
+```{r}
+# remove exceedingly long/short articles
+max_words <- mean(news$nwords, na.rm=T) + (3 * sd(news$nwords, na.rm=T))
+news_filtered <- news %>% filter(nwords >= 10 & nwords <= max_words)
+print("Dimensions after filtering by size:", quote=F)
+dim(news_filtered) # ~1.4k articles removed
+
+# take sample of articles for memory usability
+news_smpl <- news_filtered[sample(nrow(news_filtered), 1500), ]
+
+# form article corpus
+news_smpl <- news_smpl %>% select(doc_id, text, title, date, subject, is_fake, nwords) # reorder columns
+news_source <- DataframeSource(news_smpl)
+news_corpus <- VCorpus(news_source)
+
+# clean corpus text
+clean_corpus <- function(corpus) {
+  # Remove punctuation
+  corpus <- tm_map(corpus, removePunctuation)
+  remove_quotes <- content_transformer(function(x) {
+    gsub("[“”\"\'‘’`]", "", x) # Removes double quotes, single quotes, and typographic quotes
+  })
+  corpus <- tm_map(corpus, remove_quotes)
+  # remove numbers
+  corpus <- tm_map(corpus, removeNumbers)
+  # Transform to lower case
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  # remove contractions
+  corpus <- tm_map(corpus, content_transformer(replace_contraction))
+  # Remove stopwords
+  corpus <- tm_map(corpus, removeWords, words = stopwords("en"))
+  # Strip whitespace
+  corpus <- tm_map(corpus, stripWhitespace)
+  return(corpus)
+}
+news_corpus <- clean_corpus(news_corpus)
+
+# cast to dtm
+news_dtm <- DocumentTermMatrix(news_corpus)
+# weight tf-idf
+news_tfidf <- weightTfIdf(news_dtm)
+# convert to matrix
+news_mat <- as.matrix(news_tfidf)
+
+# remove words with near-zero variance of tf-idf
+nzv <- nearZeroVar(news_mat)
+predictors_reduced <- news_mat[, -nzv]
+news_reduced <- cbind(predictors_reduced, is_fake = news_smpl$is_fake)
+
+cat("\nRemoved NZV features:", length(nzv), "\n")
+cat("Remaining columns:", ncol(news_reduced), "\n")
+
+# save column names and IDF for shiny app
+feature_words <- colnames(news_reduced)
+valid_words <- intersect(feature_words, Terms(news_dtm)) # removes is_fake column
+news_tf <- as.matrix(news_dtm[, valid_words])
+idf <- log(nrow(news_tf) / colSums(news_tf > 0))
+```
+
 

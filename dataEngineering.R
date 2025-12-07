@@ -127,15 +127,5 @@ tfidf_tbl <- tf_counts %>%
 #view random sample
 tfidf_tbl %>% sample_n(50)
 
-dim(tfidf_tbl)
-length(unique(tfidf_tbl$word)) #still over 100k unique words
-# add doc frequency to table
-tfidf_tbl$df <- 1 / tfidf_tbl$idf
-extra_stopwords <- unique(filter(tfidf_tbl, df >= 0.7)$word)
 
-# drop individual tf/idf columns
-tfidf_long <- tfidf_tbl %>% select(-c(tf, idf))
-# convert to single row per doc
-tfidf_sparse <- tfidf_long %>%
-  cast_sparse(doc_id, word, tf_idf)
 
