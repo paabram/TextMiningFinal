@@ -57,4 +57,12 @@ news_corpus <- clean_corpus(news_corpus)
 news_dtm <- DocumentTermMatrix(news_corpus)
 # weight tf-idf
 news_tfidf <- weightTfIdf(news_dtm)
-write.csv(as.matrix(news_tfidf), "data/news_tfidf.csv")
+
+# save data and labels for model
+X <- as.matrix(news_tfidf)
+# get is_fake column
+doc_ids <- as.numeric(rownames(X))
+y <- news$is_fake[match(doc_ids, news$doc_id)]
+
+saveRDS(y, "data/labels.rds")
+write.csv(X, "data/news_tfidf.csv")

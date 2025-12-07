@@ -1,0 +1,271 @@
+
+> library(caret)
+
+> library(naivebayes)
+
+> library(glmnet)
+
+> library(dplyr)
+
+> library(readr)
+
+> library(e1071)
+
+> # read in news CSV and label object
+> news <- read.csv("data/news_tfidf.csv")
+
+> y <- readRDS("data/labels.rds")
+
+> # attach labels to df
+> news$is_fake <- as.factor(y)
+
+> cat("Class balance:\n")
+Class balance:
+
+> print(table(news$is_fake))
+
+FALSE  TRUE 
+  725   727 
+
+> # REMOVE NEAR-ZERO VARIANCE FEATURES
+> # Keep label safe, only clean TF-IDF columns
+> predictors <- news %>% select(-is_fake)
+
+> nzv <- nearZeroVar(predictors)
+
+> predictors_reduced <- predictors[, -nzv]
+
+> news_reduced <- cbind(predictors_reduced, is_fake = news$is_fake)
+
+> cat("\nRemoved NZV features:", length(nzv), "\n")
+
+Removed NZV features: 30253 
+
+> cat("Remaining columns:", ncol(news_reduced), "\n")
+Remaining columns: 159 
+
+> # TRAIN / TEST SPLIT
+> set.seed(123)
+
+> train_index <- createDataPartition(news_reduced$is_fake, p = 0.8, list = FALSE)
+
+> train <- news_reduced[train_index, ]
+
+> test  <- news_reduced[-train_index, ]
+
+> x_train <- train %>% select(-is_fake)
+
+> y_train <- train$is_fake
+
+> x_test  <- test %>% select(-is_fake)
+
+> y_test  <- test$is_fake
+
+> # Matrix versions for glmnet & SVM
+> x_train_mat <- as.matrix(x_train)
+
+> x_test_mat  <- as.matrix(x_test)
+
+> # LOGISTIC REGRESSION (GLMNET) 
+> log_model <- cv.glmnet(
++   x_train_mat, y_train,
++   family = "binomial",
++   alpha = 0,
++   type.measure = "clas ..." ... [TRUNCATED] 
+
+> log_pred <- predict(log_model, x_test_mat, type = "class")
+
+> log_pred <- factor(log_pred, levels = c(FALSE, TRUE))
+
+> log_cm <- confusionMatrix(as.factor(log_pred), y_test)
+
+> cat("\n================ LOGISTIC REGRESSION RESULTS ================\n")
+
+================ LOGISTIC REGRESSION RESULTS ================
+
+> print(log_cm) # 97.59% accuracy
+Confusion Matrix and Statistics
+
+          Reference
+Prediction FALSE TRUE
+     FALSE   143    5
+     TRUE      2  140
+                                          
+               Accuracy : 0.9759          
+                 95% CI : (0.9509, 0.9902)
+    No Information Rate : 0.5             
+    P-Value [Acc > NIR] : <2e-16          
+                                          
+                  Kappa : 0.9517          
+                                          
+ Mcnemar's Test P-Value : 0.4497          
+                                          
+            Sensitivity : 0.9862          
+            Specificity : 0.9655          
+         Pos Pred Value : 0.9662          
+         Neg Pred Value : 0.9859          
+             Prevalence : 0.5000          
+         Detection Rate : 0.4931          
+   Detection Prevalence : 0.5103          
+      Balanced Accuracy : 0.9759          
+                                          
+       'Positive' Class : FALSE           
+                                          
+
+> # NAIVE BAYES 
+> nb_model <- naive_bayes(is_fake ~ ., data = train)
+
+> nb_pred  <- predict(nb_model, newdata = x_test)
+
+> nb_cm <- confusionMatrix(nb_pred, y_test)
+
+> cat("\n==================== NAIVE BAYES RESULTS ====================\n")
+
+==================== NAIVE BAYES RESULTS ====================
+
+> print(nb_cm) # 92.76% accuracy
+Confusion Matrix and Statistics
+
+          Reference
+Prediction FALSE TRUE
+     FALSE   142   18
+     TRUE      3  127
+                                          
+               Accuracy : 0.9276          
+                 95% CI : (0.8914, 0.9546)
+    No Information Rate : 0.5             
+    P-Value [Acc > NIR] : < 2e-16         
+                                          
+                  Kappa : 0.8552          
+                                          
+ Mcnemar's Test P-Value : 0.00225         
+                                          
+            Sensitivity : 0.9793          
+            Specificity : 0.8759          
+         Pos Pred Value : 0.8875          
+         Neg Pred Value : 0.9769          
+             Prevalence : 0.5000          
+         Detection Rate : 0.4897          
+   Detection Prevalence : 0.5517          
+      Balanced Accuracy : 0.9276          
+                                          
+       'Positive' Class : FALSE           
+                                          
+
+> # SUPPORT VECTOR MACHINE
+> svm_model <- svm(
++   x = x_train_mat,
++   y = y_train,
++   kernel = "linear",
++   probability = TRUE
++ )
+
+> svm_pred <- predict(svm_model, x_test_mat)
+
+> svm_cm <- confusionMatrix(svm_pred, y_test)
+
+> cat("\n======================= SVM RESULTS ==========================\n")
+
+======================= SVM RESULTS ==========================
+
+> print(svm_cm) # 98.62% accuracy (BEST)
+Confusion Matrix and Statistics
+
+          Reference
+Prediction FALSE TRUE
+     FALSE   144    3
+     TRUE      1  142
+                                          
+               Accuracy : 0.9862          
+                 95% CI : (0.9651, 0.9962)
+    No Information Rate : 0.5             
+    P-Value [Acc > NIR] : <2e-16          
+                                          
+                  Kappa : 0.9724          
+                                          
+ Mcnemar's Test P-Value : 0.6171          
+                                          
+            Sensitivity : 0.9931          
+            Specificity : 0.9793          
+         Pos Pred Value : 0.9796          
+         Neg Pred Value : 0.9930          
+             Prevalence : 0.5000          
+         Detection Rate : 0.4966          
+   Detection Prevalence : 0.5069          
+      Balanced Accuracy : 0.9862          
+                                          
+       'Positive' Class : FALSE           
+                                          
+
+> # FEATURE IMPORTANCE (FROM SVM)
+> 
+> coefs <- coef(svm_model)
+
+> coefs_df <- data.frame(
++   term = labels(coefs),
++   weight = as.vector(coefs)
++ )
+
+> # Strongest positive weights point toward is_fake = TRUE (per output of svm_model$levels)
+> top_fake <- coefs_df %>%
++   arrange(desc(weight)) %>%
++ .... [TRUNCATED] 
+
+> # Strongest negative weights impact is_fake = FALSE (realnews)
+> top_real <- coefs_df %>%
++   arrange(weight) %>%
++   head(20)
+
+> cat("\n=============== TOP 20 WORDS PREDICTING FAKE NEWS =============\n")
+
+=============== TOP 20 WORDS PREDICTING FAKE NEWS =============
+
+> print(top_fake)
+         term     weight
+1        news 0.30005188
+2       obama 0.21608346
+3         don 0.18365934
+4        just 0.18293265
+5     hillary 0.17389582
+6  government 0.16751503
+7        even 0.15083627
+8        like 0.15078449
+9         via 0.14839777
+10       show 0.14712546
+11    however 0.14086533
+12      think 0.12564273
+13       says 0.12231214
+14      going 0.11116327
+15       need 0.10669128
+16       know 0.10477861
+17        war 0.10069278
+18    america 0.09833305
+19   decision 0.09658386
+20 democratic 0.09376332
+
+> cat("\n=============== TOP 20 WORDS PREDICTING REAL NEWS =============\n")
+
+=============== TOP 20 WORDS PREDICTING REAL NEWS =============
+
+> print(top_real)
+          term      weight
+1            X -1.32704360
+2      reuters -0.83251791
+3       trumps -0.42916263
+4         said -0.24908409
+5       donald -0.23015528
+6     official -0.16887335
+7      federal -0.15183880
+8        place -0.14170830
+9          can -0.12812064
+10 republicans -0.12399734
+11      policy -0.11813862
+12      leader -0.10782325
+13        back -0.10592275
+14         say -0.10322907
+15       major -0.10022350
+16   secretary -0.09627537
+17      states -0.09130265
+18    thursday -0.09104590
+19        last -0.08881329
+20     country -0.08849515
