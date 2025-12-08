@@ -4,6 +4,7 @@ library(glmnet)
 library(dplyr)
 library(readr)
 library(e1071)
+library(wordcloud)
 
 # read in news CSV and label object
 news <- read.csv("data/news_tfidf.csv", row.names = 1)
@@ -90,19 +91,18 @@ coefs_df <- data.frame(
   weight = as.vector(coefs)
 )
 
+coefs_df <- coefs_df %>% select(1, 3)
+colnames(coefs_df) <- c("term", "weight")
+
 # Strongest positive weights point toward is_fake = TRUE (per output of log_model$levels)
 top_fake <- coefs_df %>%
   arrange(desc(weight)) %>%
-  head(20) %>% 
-  select(1,3)
-colnames(top_fake) <- c("term", "weight")
+  head(20)
 
 # Strongest negative weights impact is_fake = FALSE (realnews)
 top_real <- coefs_df %>%
   arrange(weight) %>%
-  head(20) %>% 
-  select(1,3)
-colnames(top_real) <- c("term", "weight")
+  head(20)
 
 cat("\n=============== TOP 20 WORDS PREDICTING FAKE NEWS =============\n")
 print(top_fake)
@@ -110,3 +110,24 @@ print(top_fake)
 cat("\n=============== TOP 20 WORDS PREDICTING REAL NEWS =============\n")
 print(top_real)
 
+red_palette <- c("#990000", "#cc0000", "#ff3333", "#ff6666", "#ff9999")
+wordcloud(
+  words = coefs_df$term,
+  freq = coefs_df$weight,
+  min.freq = 0,
+  max.words = 100,
+  random.order = FALSE,
+  colors = red_palette,
+  scale = c(3, 1)
+)
+
+blue_palette <- c("#003366", "#004080", "#0059b3", "#3366cc", "#3399ff")
+wordcloud(
+  words = coefs_df$term,
+  freq = abs(-coefs_df$weight),
+  min.freq = 0,
+  max.words = 100,
+  random.order = FALSE,
+  colors = blue_palette,
+  scale = c(3, 1)
+)

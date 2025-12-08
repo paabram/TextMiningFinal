@@ -14,6 +14,14 @@ library(tidytext)
 library(tm)
 library(qdap)
 library(slam)
+library(lubridate)
+library(textdata)
+library(caret)
+library(naivebayes)
+library(glmnet)
+library(readr)
+library(e1071)
+library(wordcloud)
 ```
 
 ## 1) Data Acquisition, Exploration, and Preliminary Cleaning
@@ -48,7 +56,111 @@ news$date <- as.Date(news$date, "%B %d, %Y")
 # summary statistics
 summary(news)
 ```
-## 2) Data Cleaning and Engineering
+```{r}
+# create year-month field
+news <- news %>%
+  mutate(year_month = floor_date(date, "month"))
+
+# count per month and class
+monthly_counts <- news %>%
+  count(year_month, is_fake)
+
+# plot
+ggplot(monthly_counts, aes(x = year_month, y = n, fill = ifelse(is_fake, "Fake", "Real"))) +
+  geom_col(position = "dodge") +
+  scale_x_date(date_labels = "%Y-%m", date_breaks = "1 month") +
+  labs(
+    title = "Number of Articles by Month and Class",
+    x = "Month",
+    y = "Article Count",
+    fill = "Class"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+## 2) Data Cleaning and Engineering: Word Frequency / Prep for Sentiment Analysis
+```{r}
+#tokenize the text column into words
+fake_words <- Fake %>%
+  select(text) %>%           # use the article body
+  unnest_tokens(word, text)  # lowercases, no punctuation, splits into words
+
+true_words <- True %>%
+  select(text) %>%
+  unnest_tokens(word, text)
+
+# Remove common stopwords
+data("stop_words")
+
+fake_words <- fake_words %>%
+  anti_join(stop_words, by = "word")
+
+true_words <- true_words %>%
+  anti_join(stop_words, by = "word")
+
+#frequency tables
+fake_freq <- fake_words %>%
+  count(word, sort = TRUE) %>%
+  rename(fake_count = n)
+
+true_freq <- true_words %>%
+  count(word, sort = TRUE) %>%
+  rename(true_count = n)
+
+head(fake_freq, 20)   # top 20 in Fake
+head(true_freq, 20)   # top 20 in True
+
+#difference column
+comparison <- full_join(fake_freq, true_freq, by = "word") %>%
+  replace_na(list(fake_count = 0, true_count = 0)) %>%
+  mutate(
+    total = fake_count + true_count,
+    diff  = fake_count - true_count   # >0 = more common in Fake; <0 = more common in True
+  ) %>%
+  arrange(desc(total))
+
+head(comparison, 20)
+
+# Words most skewed toward Fake (with at least some overall frequency)
+comparison %>%
+  filter(total > 5000) %>%
+  arrange(desc(diff)) %>%
+  View()
+
+
+# Words most skewed toward True
+comparison %>%
+  filter(total > 5000) %>%
+  arrange(diff) %>%
+  View()
+
+# Tokenize + remove stopwords again, now keeping doc_id and label
+tokens <- news %>%
+  select(doc_id, is_fake, text) %>%
+  unnest_tokens(word, text) %>%
+  filter(str_detect(word, "^[a-z]+$")) %>%
+  filter(str_length(word) >= 3)%>%
+  anti_join(stop_words, by = "word")
+
+# Count tokens per article
+article_lengths <- tokens %>%
+  count(doc_id, name = "n_tokens")
+
+# Minimum-length rule: keep docs with at least 50 cleaned words
+min_len <- 50
+valid_docs <- article_lengths %>%
+  filter(n_tokens >= min_len) %>%
+  pull(doc_id)
+
+# Filter to valid articles
+tokens_clean <- tokens %>%
+  filter(doc_id %in% valid_docs)
+```
+
+
+## 3) Data Cleaning and Engineering: Prep for Model
 ```{r}
 # remove exceedingly long/short articles
 max_words <- mean(news$nwords, na.rm=T) + (3 * sd(news$nwords, na.rm=T))
@@ -97,15 +209,287 @@ news_mat <- as.matrix(news_tfidf)
 nzv <- nearZeroVar(news_mat)
 predictors_reduced <- news_mat[, -nzv]
 news_reduced <- cbind(predictors_reduced, is_fake = news_smpl$is_fake)
+news_reduced <- as.data.frame(news_reduced)
 
-cat("\nRemoved NZV features:", length(nzv), "\n")
+# seed was not normalized at this point, so these numbers differ slightly from presentation
+cat("\nRemoved NZV features:", length(nzv), "\n") 
 cat("Remaining columns:", ncol(news_reduced), "\n")
+```
+## 3) Sentiment Analysis
 
-# save column names and IDF for shiny app
-feature_words <- colnames(news_reduced)
-valid_words <- intersect(feature_words, Terms(news_dtm)) # removes is_fake column
-news_tf <- as.matrix(news_dtm[, valid_words])
-idf <- log(nrow(news_tf) / colSums(news_tf > 0))
+```{r}
+#Getting sentiments
+positive <- get_sentiments("bing") %>%
+  filter(sentiment == "positive")
+negative <- get_sentiments("bing") %>%
+  filter(sentiment == "negative")
+
+#Table of positive and negative words in fake/true
+amount_pos <- tokens_clean %>%
+  semi_join(positive) %>%
+  count(is_fake, name = "positive_words")
+amount_neg <- tokens_clean %>%
+  semi_join(negative) %>%
+  count(is_fake, name = "negative_words")
+
+#Merge tables to see positive and negative words in each category
+amounts <- merge(amount_pos, amount_neg, by = "is_fake")
+
+#Make it long format
+amounts_long <- pivot_longer(amounts, positive_words:negative_words,
+                             names_to = "word_sentiment", 
+                             values_to = "word_count")
+
+#Graphing it
+sentiment_analysis <- ggplot(amounts_long, aes(x = is_fake,y = word_count, 
+                                               fill = factor(word_sentiment))) +
+  geom_col(position = "dodge") +
+  labs(x = "News Type", y = "Word Count", 
+       title = "Negative and Positive Words Per Category")
+
+#Labeling the graph
+sentiment_analysis <- sentiment_analysis + guides(fill = guide_legend(title=
+                                                                          "Legend")) +
+  scale_fill_discrete(labels = c("Negative Words", "Positive Words")) +
+  scale_x_discrete(labels = c("FALSE" = "Real News", "TRUE" = "Fake News"))
+sentiment_analysis
+
+#Now doing sentiment analysis on fear, anger, trust, sadness, disgust,
+#surprise, and joy
+
+fear <- get_sentiments("nrc") %>%
+  filter(sentiment == "fear")
+anger <- get_sentiments("nrc") %>%
+  filter(sentiment == "anger")
+trust <- get_sentiments("nrc") %>%
+  filter(sentiment == "trust")
+sadness <- get_sentiments("nrc") %>%
+  filter(sentiment == "sadness")
+disgust <- get_sentiments("nrc") %>%
+  filter(sentiment == "disgust")
+surprise <- get_sentiments("nrc") %>%
+  filter(sentiment == "surprise")
+joy <- get_sentiments("nrc") %>%
+  filter(sentiment == "joy")
+
+#Matching all sentiments to fake and true articles
+
+amount_fear <- tokens_clean %>%
+  semi_join(fear) %>%
+  count(is_fake, name = "fear_words")
+amount_anger <- tokens_clean %>%
+  semi_join(anger) %>%
+  count(is_fake, name = "anger_words")
+amount_trust <- tokens_clean %>%
+  semi_join(trust) %>%
+  count(is_fake, name = "trust_words")
+amount_sadness <- tokens_clean %>%
+  semi_join(sadness) %>%
+  count(is_fake, name = "sadness_words")
+amount_disgust <- tokens_clean %>%
+  semi_join(disgust) %>%
+  count(is_fake, name = "disgust_words")
+amount_surprise <- tokens_clean %>%
+  semi_join(surprise) %>%
+  count(is_fake, name = "surprise_words")
+amount_joy <- tokens_clean %>%
+  semi_join(joy) %>%
+  count(is_fake, name = "joy_words")
+
+#Merging all tables
+amounts_nrc <- merge(amount_fear, amount_anger, by = "is_fake")
+amounts_nrc <- merge(amounts_nrc, amount_trust, by = "is_fake")
+amounts_nrc <- merge(amounts_nrc, amount_sadness, by = "is_fake")
+amounts_nrc <- merge(amounts_nrc, amount_disgust, by = "is_fake")
+amounts_nrc <- merge(amounts_nrc, amount_surprise, by = "is_fake")
+amounts_nrc <- merge(amounts_nrc, amount_joy, by = "is_fake")
+
+#Make amounts_nrc long
+amounts_nrc_long <- pivot_longer(amounts_nrc, fear_words:joy_words,
+                                 names_to = "sentiment_type", 
+                                 values_to = "word_count")
+
+#Graphing NRC sentiments
+sentiment_analysis_nrc <- ggplot(amounts_nrc_long,
+                                 aes(x = is_fake, y = word_count,
+                                     fill = sentiment_type)) +
+  geom_col(position = "dodge") +
+  labs(x = "News Type", y = "Word Count", title = "Sentiment Type Per Category")
+sentiment_analysis_nrc <- sentiment_analysis_nrc + 
+  guides(fill = guide_legend(title = "Legend")) +
+  scale_fill_discrete(labels = c("Anger", "Disgust", "Fear", "Joy", "Sadness",
+                                 "Surprise", "Trust")) +
+  scale_x_discrete(labels = c("FALSE" = "Real News", "TRUE" = "Fake News"))
+sentiment_analysis_nrc
+
+#Normalizing nrc data
+
+amounts_nrc_long$percent <- NA
+
+for (i in 1:7) {
+  amounts_nrc_long$percent[i] <- 
+    amounts_nrc_long$word_count[i]/(sum(amounts_nrc_long$word_count[1:7]))
+}
+
+for (i in 8:14) {
+  amounts_nrc_long$percent[i] <- 
+    amounts_nrc_long$word_count[i]/(sum(amounts_nrc_long$word_count[8:14]))
+}
+
+#Normalizing positive and negative data
+
+amounts_long$percent <- NA
+for (i in 1:2) {
+  amounts_long$percent[i] <-
+    amounts_long$word_count[i]/(sum(amounts_long$word_count[1:2]))
+}
+
+for (i in 3:4) {
+  amounts_long$percent[i] <-
+    amounts_long$word_count[i]/(sum(amounts_long$word_count[3:4]))
+}
+
+#Making normalized graph for nrc data
+
+normal_analysis_nrc <- ggplot(amounts_nrc_long,
+                                 aes(x = is_fake, y = percent,
+                                     fill = sentiment_type)) +
+  geom_col(position = "dodge") +
+  labs(x = "News Type", y = "Percent Word Count", title = "Sentiment Type Per Category Normalized")
+normal_analysis_nrc <- normal_analysis_nrc + 
+  guides(fill = guide_legend(title = "Legend")) +
+  scale_fill_discrete(labels = c("Anger", "Disgust", "Fear", "Joy", "Sadness",
+                                 "Surprise", "Trust")) +
+  scale_x_discrete(labels = c("FALSE" = "Real News", "TRUE" = "Fake News"))
+normal_analysis_nrc
+
+#Making normalized graph for the basic pos/neg data
+normal_analysis <- ggplot(amounts_long, aes(x = is_fake,y = percent, 
+                                               fill = factor(word_sentiment))) +
+  geom_col(position = "dodge") +
+  labs(x = "News Type", y = "Percent Word Count", 
+       title = "Negative and Positive Words Per Category Normalized")
+
+#Labeling the graph
+normal_analysis <- normal_analysis + guides(fill = guide_legend(title=
+                                                                        "Legend")) +
+  scale_fill_discrete(labels = c("Negative Words", "Positive Words")) +
+  scale_x_discrete(labels = c("FALSE" = "Real News", "TRUE" = "Fake News"))
+normal_analysis
+```
+## 4) Binary Classification Models
+
+```{r}
+cat("Class balance:\n")
+print(table(news_reduced$is_fake)) # again due to not setting seed prior these numbers differ
+
+news_reduced$is_fake <- as.factor(news_reduced$is_fake)
+
+# TRAIN / TEST SPLIT
+set.seed(123)
+
+train_index <- createDataPartition(news_reduced$is_fake, p = 0.8, list = FALSE)
+
+train <- news_reduced[train_index, ]
+test  <- news_reduced[-train_index, ]
+
+x_train <- train %>% select(-is_fake)
+y_train <- train$is_fake
+
+x_test  <- test %>% select(-is_fake)
+y_test  <- test$is_fake
+
+# Matrix versions for glmnet & SVM
+x_train_mat <- as.matrix(x_train)
+x_test_mat  <- as.matrix(x_test)
+
+# LOGISTIC REGRESSION (GLMNET) 
+log_model <- cv.glmnet(
+  x_train_mat, y_train,
+  family = "binomial",
+  alpha = 0,
+  type.measure = "class"
+)
+
+log_pred <- predict(log_model, x_test_mat, type = "class")
+log_pred <- as.factor(ifelse(log_pred == "1", 1, 0))
+
+log_cm <- confusionMatrix(as.factor(log_pred), y_test)
+cat("\n================ LOGISTIC REGRESSION RESULTS ================\n")
+print(log_cm) 
+
+# NAIVE BAYES 
+nb_model <- naive_bayes(is_fake ~ ., data = train)
+nb_pred  <- predict(nb_model, newdata = x_test)
+
+nb_cm <- confusionMatrix(nb_pred, y_test)
+cat("\n==================== NAIVE BAYES RESULTS ====================\n")
+print(nb_cm) # 92.07% accuracy
+
+# SUPPORT VECTOR MACHINE
+svm_model <- svm(
+  x = x_train_mat,
+  y = y_train,
+  kernel = "linear",
+  probability = TRUE
+)
+svm_pred <- predict(svm_model, x_test_mat)
+
+svm_cm <- confusionMatrix(svm_pred, y_test)
+cat("\n======================= SVM RESULTS ==========================\n")
+print(svm_cm) # 92.07% accuracy
+
+
+# FEATURE IMPORTANCE (FROM REGRESSION)
+
+coefs <- coef(log_model)
+coefs_df <- data.frame(
+  term = labels(coefs),
+  weight = as.vector(coefs)
+)
+
+coefs_df <- coefs_df %>% select(1, 3)
+colnames(coefs_df) <- c("term", "weight")
+
+# Strongest positive weights point toward is_fake = TRUE 
+top_fake <- coefs_df %>%
+  arrange(desc(weight)) %>%
+  head(20)
+
+# Strongest negative weights impact is_fake = FALSE (realnews)
+top_real <- coefs_df %>%
+  arrange(weight) %>%
+  head(20)
+
+cat("\n=============== TOP 20 WORDS PREDICTING FAKE NEWS =============\n")
+print(top_fake)
+
+cat("\n=============== TOP 20 WORDS PREDICTING REAL NEWS =============\n")
+print(top_real)
+```
+```{r}
+red_palette <- c("#990000", "#cc0000", "#ff3333", "#ff6666", "#ff9999")
+wordcloud(
+  words = coefs_df$term,
+  freq = coefs_df$weight,
+  min.freq = 0,
+  max.words = 100,
+  random.order = FALSE,
+  colors = red_palette,
+  scale = c(3, 1)
+)
 ```
 
+```{r}
+blue_palette <- c("#003366", "#004080", "#0059b3", "#3366cc", "#3399ff")
+wordcloud(
+  words = coefs_df$term,
+  freq = abs(-coefs_df$weight),
+  min.freq = 0,
+  max.words = 100,
+  random.order = FALSE,
+  colors = blue_palette,
+  scale = c(3, 1)
+)
+```
 

@@ -31,7 +31,7 @@ clean_corpus <- function(corpus) {
   return(corpus)
 }
 
-model <- log_model
+model <- svm_model
 
 # -----------------------
 # UI
@@ -98,11 +98,8 @@ server <- function(input, output) {
     # Compute tf-idf
     tfidf <- tf * idf
     
-    # glmnet MUST receive a matrix:
-    tfidf <- as.matrix(tfidf)
-    
-    # Predict (cv.glmnet)
-    pred <- predict(model, newx = tfidf, s = "lambda.min")
+    print(setdiff(colnames(tfidf), valid_words))
+    pred <- predict(model, newdata = as.data.frame(tfidf))
     
     
     paste("Prediction:", pred)
